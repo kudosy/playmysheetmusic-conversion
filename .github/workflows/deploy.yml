@@ -88,13 +88,20 @@ jobs:
           {
             echo "# Last deploy: $OUTCOME"
             echo
+            if grep -q "ALL CHECKS PASSED" "$GITHUB_WORKSPACE/deploy.log" 2>/dev/null; then
+              echo "The live service was checked with the sample page and every check passed."
+            else
+              echo "The live service was NOT confirmed working. See the log below."
+            fi
+            echo
             echo "- Commit: $GITHUB_SHA"
             echo "- Finished: $(date -u '+%Y-%m-%d %H:%M UTC')"
             echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo
             echo '```'
             # plain text only: drop colour codes and progress spinners
-            sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' -e 's/\r/\n/g' "$GITHUB_WORKSPACE/deploy.log" 2>/dev/null | grep -v '^\s*$' | tail -n 400
+            sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' -e 's/\r/\n/g' "$GITHUB_WORKSPACE/deploy.log" 2>/dev/null \
+              | grep -v -e '^\s*$' -e '^Downloaded [0-9]' -e '^Downloading ' -e '^Collecting ' -e '━━' | tail -n 300
             echo '```'
           } > STATUS.md
           git init -q -b deploy-log
