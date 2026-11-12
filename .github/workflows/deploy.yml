@@ -1,0 +1,105 @@
+name: Deploy to Modal
+
+# Every push to main: run the quick tests, deploy the service to Modal, then
+# check the live service with the sample page. The outcome and the full log
+# are written to the "deploy-log" branch of this repository (file STATUS.md).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tools
+        run: pip install "modal==1.6.4" "fastapi[standard]==0.162.5" pytest httpx 2>&1 | tail -n 2
+
+      - name: Quick tests
+        shell: bash
+        run: |
+          set -o pipefail
+          echo "== Quick tests ==" | tee -a deploy.log
+          python -m pytest tests/test_notes.py tests/test_web.py -q 2>&1 | tee -a deploy.log
+
+      - name: Check the Modal token is present
+        shell: bash
+        run: |
+          if [ -z "$MODAL_TOKEN_ID" ] || [ -z "$MODAL_TOKEN_SECRET" ]; then
+            echo "MODAL_TOKEN_ID or MODAL_TOKEN_SECRET is missing from this repository's secrets." | tee -a deploy.log
+            exit 1
+          fi
+
+      - name: Make sure the shared secret exists on Modal
+        shell: bash
+        run: |
+          set -o pipefail
+          echo "== Shared secret ==" | tee -a deploy.log
+          # The web address refuses every request without this secret. If it
+          # has never been set, lock the service with a random one; the real
+          # value is set later in the Modal dashboard (Secrets > pms-conversion).
+          if modal secret list --json 2>>deploy.log | grep -q '"pms-conversion"'; then
+            echo "Secret pms-conversion already exists; left as it is." | tee -a deploy.log
+          else
+            modal secret create pms-conversion "CONVERSION_SECRET=$(openssl rand -hex 32)" > /dev/null 2>>deploy.log
+            echo "Secret pms-conversion created with a random value." | tee -a deploy.log
+          fi
+
+      - name: Deploy
+        shell: bash
+        run: |
+          set -o pipefail
+          echo "== Deploy ==" | tee -a deploy.log
+          modal deploy modal_app.py 2>&1 | tee -a deploy.log
+
+      - name: Check the live service
+        shell: bash
+        run: |
+          set -o pipefail
+          echo "== Live check ==" | tee -a deploy.log
+          python scripts/smoke_test.py 2>&1 | tee -a deploy.log
+
+      - name: Publish the outcome
+        if: always()
+        shell: bash
+        env:
+          OUTCOME: ${{ job.status }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/status && cd /tmp/status
+          {
+            echo "# Last deploy: $OUTCOME"
+            echo
+            echo "- Commit: $GITHUB_SHA"
+            echo "- Finished: $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo '```'
+            # plain text only: drop colour codes and progress spinners
+            sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' -e 's/\r/\n/g' "$GITHUB_WORKSPACE/deploy.log" 2>/dev/null | grep -v '^\s*$' | tail -n 400
+            echo '```'
+          } > STATUS.md
+          git init -q -b deploy-log
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add STATUS.md
+          git commit -q -m "Deploy outcome for $GITHUB_SHA: $OUTCOME"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" deploy-log

@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+out/
+*.musicxml
+*_teaser.png
+.pytest_cache/

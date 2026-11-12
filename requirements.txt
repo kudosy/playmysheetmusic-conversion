@@ -1,0 +1,12 @@
+# The recognition engine. AGPL-3.0, which is why this repository is public
+# and separate from the website.
+homr[cpu]==0.7.1
+
+# Versions the tests were last run with.
+onnxruntime==1.31.1
+numpy==2.5.4
+opencv-python-headless==4.14.0.94
+Pillow==12.3.0
+pillow-heif==1.8.1
+pypdfium2==5.15.2
+rapidocr==3.10.0
