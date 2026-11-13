@@ -20,7 +20,7 @@ GOOD = {"ok": True, "title": "T", "score": {"bars": [{"n": 0}], "notes": [{"id":
 
 @pytest.fixture
 def site():
-    state = {"calls": [], "fail_first": 0, "status": 200}
+    state = {"calls": [], "pages": [], "fail_first": 0, "status": 200}
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -33,7 +33,15 @@ def site():
             self.wfile.write(b"PAGE:" + self.path.encode())
 
         def do_POST(self):
-            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            raw = self.rfile.read(int(self.headers["Content-Length"]))
+            if self.path.startswith("/api/conversion/page"):
+                state["pages"].append({"path": self.path, "auth": self.headers.get("Authorization"),
+                                       "type": self.headers.get("Content-Type"), "body": raw})
+                self.send_response(500 if b"BROKEN" in raw else 200)
+                self.end_headers()
+                self.wfile.write(b"{}")
+                return
+            body = json.loads(raw)
             state["calls"].append({"auth": self.headers.get("Authorization"), "body": body})
             if state["fail_first"] > 0:
                 state["fail_first"] -= 1
@@ -117,3 +125,24 @@ def test_only_https_addresses_are_accepted():
             check_address(bad)
     out = run_song("s", ["http://example.com/a.jpg"], lambda files: GOOD)
     assert out["ok"] is False and out["code"] == "failed"
+
+
+def test_page_pictures_are_sent_before_the_result(site):
+    result = dict(GOOD, images=[b"JPEG ONE", None, b"BROKEN", b"JPEG FOUR"])
+    out = run_song("song-9", [site["base"] + "/files/1.pdf"], lambda files: result,
+                   site["base"] + "/api/conversion/callback", SECRET, allow_plain_http=True,
+                   report_waits=(0,), page_url=site["base"] + "/api/conversion/page")
+    assert [(p["path"], p["body"], p["type"], p["auth"]) for p in site["pages"]] == [
+        ("/api/conversion/page?song=song-9&page=0", b"JPEG ONE", "image/jpeg", f"Bearer {SECRET}"),
+        ("/api/conversion/page?song=song-9&page=2", b"BROKEN", "image/jpeg", f"Bearer {SECRET}"),
+        ("/api/conversion/page?song=song-9&page=3", b"JPEG FOUR", "image/jpeg", f"Bearer {SECRET}"),
+    ]
+    body = site["calls"][0]["body"]
+    assert body["page_images"] == [0, 3]  # the page that could not be stored is left out
+    assert "images" not in body and out["reported"] is True
+
+
+def test_no_pictures_are_sent_without_an_address(site):
+    result = dict(GOOD, images=[b"JPEG ONE"])
+    run(site, [site["base"] + "/files/1.jpg"], lambda files: result)
+    assert site["pages"] == [] and site["calls"][0]["body"]["page_images"] == []

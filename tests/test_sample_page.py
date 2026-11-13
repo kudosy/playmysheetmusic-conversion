@@ -24,6 +24,14 @@ def test_sample_page_is_read_correctly():
     score = result["score"]
     assert problems(score) == []
     assert [bar["line"] for bar in score["bars"]] == [0, 0, 0, 0, 1, 1, 1, 1]
+    # Where the two lines and their bars sit on the page.
+    first, second = score["lines"]
+    assert (first["first"], first["last"], second["first"], second["last"]) == (0, 3, 4, 7)
+    assert first["box"][3] <= second["box"][1] + 0.001 and first["box"][0] < 0.1 and first["box"][2] > 0.9
+    for line in (first, second):
+        assert len(line["barx"]) == 5 and line["barx"] == sorted(line["barx"])
+        widths = [b - a for a, b in zip(line["barx"], line["barx"][1:])]
+        assert max(widths) < 2.2 * min(widths)  # four bars of similar width on the page
 
 
 @pytest.mark.slow

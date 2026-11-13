@@ -13,13 +13,14 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 MAX_FILE_BYTES = 25 * 1024 * 1024  # the site allows 20 MB per file
 MAX_FILES_PER_SONG = 10
 DOWNLOAD_TIMEOUT = 60
 REPORT_TIMEOUT = 30
 REPORT_WAITS = (0, 3, 10, 30, 60)  # seconds before each try at reporting back
+PAGE_WAITS = (0, 3, 10)  # the same for sending a page picture
 
 MSG_FAILED = "Something went wrong while reading this song."
 MSG_DOWNLOAD = "We couldn't fetch the uploaded file."
@@ -49,17 +50,16 @@ def fetch_file(url: str, allow_plain_http: bool = False) -> bytes:
     return data
 
 
-def report(callback_url: str, secret: str, payload: dict, allow_plain_http: bool = False,
-           waits: tuple[float, ...] = REPORT_WAITS) -> bool:
-    """Post the outcome to the website. Tries a few times; True once it lands."""
-    check_address(callback_url, allow_plain_http)
-    body = json.dumps(payload, separators=(",", ":")).encode()
+def _post(url: str, secret: str, body: bytes, content_type: str, allow_plain_http: bool,
+          waits: tuple[float, ...]) -> bool:
+    """Post something to the website. Tries a few times; True once it lands."""
+    check_address(url, allow_plain_http)
     for wait in waits:
         if wait:
             time.sleep(wait)
         request = urllib.request.Request(
-            callback_url, data=body, method="POST",
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {secret}",
+            url, data=body, method="POST",
+            headers={"Content-Type": content_type, "Authorization": f"Bearer {secret}",
                      "User-Agent": "pms-conversion"},
         )
         try:
@@ -74,6 +74,22 @@ def report(callback_url: str, secret: str, payload: dict, allow_plain_http: bool
     return False
 
 
+def report(callback_url: str, secret: str, payload: dict, allow_plain_http: bool = False,
+           waits: tuple[float, ...] = REPORT_WAITS) -> bool:
+    """Post the outcome of a song to the website."""
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    return _post(callback_url, secret, body, "application/json", allow_plain_http, waits)
+
+
+def send_page(page_url: str, secret: str, song_id: str, page: int, jpeg: bytes,
+              allow_plain_http: bool = False, waits: tuple[float, ...] = PAGE_WAITS) -> bool:
+    """Send the cleaned-up picture of one page to the website, which keeps it
+    for the note editor."""
+    joiner = "&" if "?" in page_url else "?"
+    url = f"{page_url}{joiner}{urlencode({'song': song_id, 'page': page})}"
+    return _post(url, secret, jpeg, "image/jpeg", allow_plain_http, waits)
+
+
 def run_song(
     song_id: str,
     urls: list[str],
@@ -82,9 +98,14 @@ def run_song(
     secret: str = "",
     allow_plain_http: bool = False,
     report_waits: tuple[float, ...] = REPORT_WAITS,
+    page_url: str | None = None,
 ) -> dict:
     """Download, convert, report. `convert` takes the files and returns the
-    usual result dictionary. Returns what was (or would have been) reported."""
+    usual result dictionary. Returns what was (or would have been) reported.
+
+    When `page_url` is given and the result has "images" (the cleaned-up
+    pages), each is sent there first; "page_images" in the report lists the
+    pages that arrived."""
     started = time.time()
     try:
         if not urls or len(urls) > MAX_FILES_PER_SONG:
@@ -98,7 +119,18 @@ def run_song(
         else:
             result = convert(files)
             if result.get("ok"):
+                stored: list[int] = []
+                if page_url:
+                    for number, jpeg in enumerate(result.get("images") or []):
+                        try:
+                            if jpeg and send_page(page_url, secret, song_id, number, jpeg, allow_plain_http,
+                                                  tuple(w for w in PAGE_WAITS if w <= max(report_waits, default=0))
+                                                  or (0,)):
+                                stored.append(number)
+                        except Exception:
+                            pass  # the song is still usable without its pictures
                 payload = {"ok": True, "score": result["score"], "title": result.get("title", ""),
+                           "page_images": stored,
                            "pages": [{k: page.get(k) for k in ("page", "ok", "bars", "notes", "steps")}
                                      for page in result.get("pages", [])]}
             else:

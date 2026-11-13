@@ -43,8 +43,8 @@ def client(monkeypatch):
 
     songs = []
 
-    async def start_song(song_id, urls, callback_url):
-        songs.append((song_id, urls, callback_url))
+    async def start_song(song_id, urls, callback_url, page_url):
+        songs.append((song_id, urls, callback_url) + ((page_url,) if page_url else ()))
 
     async def preview(url, top):
         songs.append(("preview", url, top))
@@ -134,3 +134,11 @@ def test_checkout_preview(client):
     assert no.status_code == 422 and no.json()["code"] == "no_music"
     assert client.post("/preview", json={"url": "http://x.co/a.jpg"}, headers=AUTH).status_code == 400
     assert client.post("/preview", json={"url": "https://x.co/a.jpg", "top": 3}, headers=AUTH).status_code == 422
+
+
+def test_page_picture_address_is_passed_on(client):
+    order = {"callback_url": "https://site/cb", "page_url": "https://site/page",
+             "songs": [{"song_id": "a", "files": ["https://x.co/1.jpg"]}]}
+    assert client.post("/songs", json=order, headers=AUTH).status_code == 202
+    assert client.songs == [("a", ["https://x.co/1.jpg"], "https://site/cb", "https://site/page")]
+    assert client.post("/songs", json={**order, "page_url": "ftp://site/page"}, headers=AUTH).status_code == 400

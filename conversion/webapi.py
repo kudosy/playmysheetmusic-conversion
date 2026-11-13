@@ -19,6 +19,7 @@ pages), "top" (read only this share of each page from the top, e.g. 0.33) and
 /songs is what the website uses after a purchase. It takes JSON:
 
     {"callback_url": "https://.../api/conversion/callback",
+     "page_url": "https://.../api/conversion/page",        (optional)
      "songs": [{"song_id": "...", "files": ["https://...page1", "https://...page2"]}]}
 
 and answers at once. Each song is then converted on its own, and the result
@@ -26,6 +27,9 @@ is posted to callback_url with the same Authorization header:
 
     {"song_id": "...", "ok": true, "score": {...}, "title": "...", "pages": [...]}
     {"song_id": "...", "ok": false, "code": "no_music", "message": "..."}
+
+With page_url, the cleaned-up picture of every page is first posted there as
+a JPEG (page_url?song=<id>&page=<number>), for the note editor.
 
 /preview is what the website uses at checkout. It takes JSON
 {"url": "https://...page1", "top": 0.33}, reads only that share of the first
@@ -51,7 +55,7 @@ MIN_SECRET_LENGTH = 16
 Run = Callable[[list[bytes], "int | None", "float | None", bool], Awaitable[dict]]
 Start = Callable[[list[bytes], "int | None", "float | None", bool], Awaitable[str]]
 Poll = Callable[[str], Awaitable["dict | None"]]
-StartSong = Callable[[str, list[str], str], Awaitable[None]]
+StartSong = Callable[[str, list[str], str, "str | None"], Awaitable[None]]
 Preview = Callable[[str, float], Awaitable[dict]]
 MAX_SONGS_PER_ORDER = 40
 
@@ -68,6 +72,7 @@ class PreviewRequest(BaseModel):
 
 class OrderRequest(BaseModel):
     callback_url: str = Field(max_length=2000)
+    page_url: str | None = Field(default=None, max_length=2000)  # where to send page pictures
     songs: list[SongRequest] = Field(min_length=1, max_length=MAX_SONGS_PER_ORDER)
 
 
@@ -159,13 +164,15 @@ def build_api(run: Run, start: Start, poll: Poll, start_song: StartSong | None =
             raise HTTPException(501, "Not available here.")
         try:
             check_address(order.callback_url)
+            if order.page_url:
+                check_address(order.page_url)
             for song in order.songs:
                 for url in song.files:
                     check_address(url)
         except BadAddress as error:
             raise HTTPException(400, str(error))
         for song in order.songs:
-            await start_song(song.song_id, song.files, order.callback_url)
+            await start_song(song.song_id, song.files, order.callback_url, order.page_url)
         return JSONResponse({"ok": True, "started": len(order.songs)}, status_code=202)
 
     @api.post("/preview")

@@ -47,6 +47,9 @@ def main() -> int:
     cold = time.time() - started
     wrong = problems(first["score"]) if first.get("ok") else [str(first)]
     check("one page: every note right", not wrong, "; ".join(wrong[:3]))
+    lines = first.get("score", {}).get("lines", [])
+    check("lines and bars are located on the page", len(lines) == 2 and all(line["box"] and line["barx"] and len(line["barx"]) == 5 for line in lines),
+          str(lines)[:200])
     print(f"      first request after deploy (cold start): {cold:.1f}s, of which reading the page {first.get('seconds')}s", flush=True)
 
     started = time.time()

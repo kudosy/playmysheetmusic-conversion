@@ -51,6 +51,18 @@ released under the same licence (see `LICENSE`).
 }
 ```
 
+`score` also has `lines`, one entry per line of music, for the note editor:
+
+```json
+{"page": 0, "line": 1, "first": 4, "last": 7,
+ "box": [0.085, 0.300, 0.878, 0.516], "barx": [0.142, 0.411, 0.499, 0.789, 0.862]}
+```
+
+`first` and `last` are the bars on the line. `box` is where the line sits on
+the cleaned-up page (left, top, right, bottom, as shares of the page) and
+`barx` where its bars begin and end; either is `null` when it could not be
+worked out. The positions come from homr's attention and are approximate.
+
 `score` is exactly what goes into `songs.notes` on the site. Time is counted
 in 32nd notes. In a note, `b` is the bar, `p` the part (0 voice line, 1 right
 hand, 2 left hand), `v` the voice within the part, `t` the start inside the

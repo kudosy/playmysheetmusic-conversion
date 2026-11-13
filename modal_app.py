@@ -46,9 +46,9 @@ image = (
 
 
 @app.function(image=image, cpu=4, memory=4096, timeout=900, max_containers=8, scaledown_window=120)
-def read_one_page(png: bytes, with_title: bool) -> tuple[str | None, float]:
+def read_one_page(png: bytes, with_title: bool) -> tuple[str | None, float, dict | None]:
     """Read one cleaned-up page. Returns its MusicXML (None if no music was
-    found) and the seconds it took."""
+    found), the seconds it took, and where its lines and bars sit."""
     import time
 
     import cv2
@@ -59,10 +59,10 @@ def read_one_page(png: bytes, with_title: bool) -> tuple[str | None, float]:
     started = time.time()
     picture = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
     try:
-        xml, _ = read_page(picture, with_title=with_title)
+        xml, _, layout = read_page(picture, with_title=with_title)
     except NoMusicFound:
-        xml = None
-    return xml, round(time.time() - started, 1)
+        xml, layout = None, None
+    return xml, round(time.time() - started, 1), layout
 
 
 @app.function(image=image, cpu=4, memory=4096, timeout=1800, max_containers=4, scaledown_window=300)
@@ -71,9 +71,11 @@ def convert_song(
     max_pages: int | None = None,
     top_fraction: float | None = None,
     keep_musicxml: bool = False,
+    keep_page_images: bool = False,
 ) -> dict:
     """Convert one song. Always returns a dictionary: {"ok": True, "score": ...}
-    or {"ok": False, "code": ..., "message": ...}."""
+    or {"ok": False, "code": ..., "message": ...}. With keep_page_images the
+    result also has "images", the cleaned-up pages as JPEG bytes."""
     import cv2
 
     from conversion.pipeline import ConversionError, convert, read_pages_here
@@ -87,7 +89,7 @@ def convert_song(
 
     try:
         return convert(files, max_pages=max_pages, top_fraction=top_fraction,
-                       keep_musicxml=keep_musicxml, reader=reader)
+                       keep_musicxml=keep_musicxml, keep_page_images=keep_page_images, reader=reader)
     except ConversionError as error:
         return {"ok": False, "code": error.code, "message": error.message}
 
@@ -100,6 +102,7 @@ def convert_purchased_song(
     callback_url: str | None = None,
     max_pages: int | None = None,
     top_fraction: float | None = None,
+    page_url: str | None = None,
 ) -> dict:
     """Download a song's pages from their links, convert them, and (when a
     callback address is given) post the result to the website. Returns what
@@ -110,9 +113,10 @@ def convert_purchased_song(
     from conversion.jobs import run_song
 
     def convert(files):
-        return convert_song.local(files, max_pages, top_fraction)
+        return convert_song.local(files, max_pages, top_fraction, False, bool(page_url))
 
-    return run_song(song_id, urls, convert, callback_url, os.environ.get("CONVERSION_SECRET", ""))
+    return run_song(song_id, urls, convert, callback_url, os.environ.get("CONVERSION_SECRET", ""),
+                    page_url=page_url)
 
 
 @app.function(image=image, secrets=[modal.Secret.from_name(SECRET_NAME)], cpu=0.5, memory=1024,
@@ -140,8 +144,8 @@ def web():
         except (modal.exception.NotFoundError, modal.exception.InvalidError) as error:
             raise NoSuchJob(job) from error
 
-    async def start_song(song_id, urls, callback_url):
-        await convert_purchased_song.spawn.aio(song_id, urls, callback_url)
+    async def start_song(song_id, urls, callback_url, page_url):
+        await convert_purchased_song.spawn.aio(song_id, urls, callback_url, None, None, page_url)
 
     async def preview(url, top):
         return await convert_purchased_song.remote.aio("preview", [url], None, 1, top)
