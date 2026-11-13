@@ -50,7 +50,13 @@ def client(monkeypatch):
         songs.append(("preview", url, top))
         return GOOD if "good" in url else {"ok": False, "code": "no_music", "message": "We couldn't find sheet music in this image."}
 
-    test_client = TestClient(build_api(run, start, poll, start_song, preview))
+    rereads = []
+
+    async def start_reread(wanted):
+        rereads.append(wanted)
+
+    test_client = TestClient(build_api(run, start, poll, start_song, preview, start_reread))
+    test_client.rereads = rereads
     test_client.seen = seen
     test_client.songs = songs
     return test_client
@@ -142,3 +148,20 @@ def test_page_picture_address_is_passed_on(client):
     assert client.post("/songs", json=order, headers=AUTH).status_code == 202
     assert client.songs == [("a", ["https://x.co/1.jpg"], "https://site/cb", "https://site/page")]
     assert client.post("/songs", json={**order, "page_url": "ftp://site/page"}, headers=AUTH).status_code == 400
+
+
+def test_reading_lines_again_is_started(client):
+    test_client, calls = client, {"reread": client.rereads}
+    body = {"song_id": "s1", "callback_url": "https://site.example/api/conversion/reread",
+            "page_url": "https://site.example/api/conversion/page",
+            "pages": [{"page": 0, "url": "https://store.example/p0.jpg", "turn": 90}],
+            "lines": [{"keep": 0}, {"page": 0, "box": [0.1, 0.2, 0.9, 0.4]}],
+            "score": {"bars": [], "notes": [], "lines": []}}
+    response = test_client.post("/reread", json=body, headers=AUTH)
+    assert response.status_code == 202 and calls["reread"][0]["lines"][1]["box"] == [0.1, 0.2, 0.9, 0.4]
+    assert calls["reread"][0]["pages"][0]["turn"] == 90
+    for change in ({"callback_url": "http://site.example/x"}, {"lines": []}, {"score": {}},
+                   {"pages": [{"page": 0, "url": "https://store.example/p0.jpg", "turn": 45}]},
+                   {"pages": [{"page": 0, "url": "file:///etc/passwd"}]}):
+        assert test_client.post("/reread", json={**body, **change}, headers=AUTH).status_code in (400, 422)
+    assert test_client.post("/reread", json=body).status_code == 401

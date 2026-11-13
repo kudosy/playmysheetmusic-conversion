@@ -4,13 +4,14 @@ Deployed by .github/workflows/deploy.yml on every push to main:
 
     modal deploy modal_app.py
 
-Three pieces:
+The pieces:
 
   convert_song   file(s) in, notes out. Called from the web address below, or
                  directly with the Modal Python library.
   convert_purchased_song
                  what runs after a purchase: fetches a song's uploaded pages,
                  converts them and posts the result back to the website.
+  reread_song    reads again the lines whose boxes the owner of a song corrected.
   read_one_page  reads a single page; convert_song uses it to read the pages
                  of a long song side by side instead of one after another.
   web            the web address the website talks to.
@@ -119,6 +120,38 @@ def convert_purchased_song(
                     page_url=page_url)
 
 
+@app.function(image=image, secrets=[modal.Secret.from_name(SECRET_NAME)], cpu=4, memory=4096,
+              timeout=1800, max_containers=8, scaledown_window=120)
+def reread_song(wanted: dict) -> dict:
+    """Read again the lines of a song whose boxes its owner corrected, and
+    post the new notes to the website. See conversion/reread.py."""
+    import os
+
+    import cv2
+
+    from conversion.jobs import run_reread
+    from conversion.pipeline import ConversionError, read_pages_here
+    from conversion.reread import BadLayout, reread
+
+    def reader(images, with_title):
+        if len(images) == 1:
+            return read_pages_here(images, with_title)
+        pngs = [cv2.imencode(".png", picture)[1].tobytes() for picture in images]
+        return list(read_one_page.map(pngs, [False] * len(images)))
+
+    def again(pictures, turns, lines, score):
+        try:
+            return reread(pictures, turns, lines, score, reader=reader)
+        except ConversionError as error:
+            return {"ok": False, "code": error.code, "message": error.message}
+        except BadLayout:
+            return {"ok": False, "code": "layout", "message": "Those boxes could not be used."}
+
+    return run_reread(wanted["song_id"], wanted["pages"], wanted["lines"], wanted["score"], again,
+                      wanted.get("callback_url"), os.environ.get("CONVERSION_SECRET", ""),
+                      page_url=wanted.get("page_url"))
+
+
 @app.function(image=image, secrets=[modal.Secret.from_name(SECRET_NAME)], cpu=0.5, memory=1024,
               timeout=900, max_containers=2, scaledown_window=300)
 @modal.concurrent(max_inputs=20)
@@ -150,4 +183,7 @@ def web():
     async def preview(url, top):
         return await convert_purchased_song.remote.aio("preview", [url], None, 1, top)
 
-    return build_api(run, start, poll, start_song, preview, service=APP_NAME)
+    async def start_reread(wanted):
+        await reread_song.spawn.aio(wanted)
+
+    return build_api(run, start, poll, start_song, preview, start_reread, service=APP_NAME)

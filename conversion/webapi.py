@@ -31,6 +31,18 @@ is posted to callback_url with the same Authorization header:
 With page_url, the cleaned-up picture of every page is first posted there as
 a JPEG (page_url?song=<id>&page=<number>), for the note editor.
 
+/reread is what the website uses when the owner of a song has corrected
+where its lines sit on the pages (see conversion/reread.py). It takes JSON:
+
+    {"song_id": "...", "callback_url": "https://...", "page_url": "https://...",
+     "pages": [{"page": 0, "url": "https://...page picture", "turn": 0}],
+     "lines": [{"keep": 0}, {"page": 0, "box": [0.05, 0.3, 0.95, 0.45]}],
+     "score": {"bars": [...], "notes": [...], "lines": [...]}}
+
+and answers at once. The new notes are posted to callback_url:
+
+    {"song_id": "...", "ok": true, "score": {...}, "bar_map": {"4": 8}, "turned": [0]}
+
 /preview is what the website uses at checkout. It takes JSON
 {"url": "https://...page1", "top": 0.33}, reads only that share of the first
 page from the top, and answers with the usual result.
@@ -57,6 +69,7 @@ Start = Callable[[list[bytes], "int | None", "float | None", bool], Awaitable[st
 Poll = Callable[[str], Awaitable["dict | None"]]
 StartSong = Callable[[str, list[str], str, "str | None"], Awaitable[None]]
 Preview = Callable[[str, float], Awaitable[dict]]
+StartReread = Callable[[dict], Awaitable[None]]
 MAX_SONGS_PER_ORDER = 40
 
 
@@ -76,12 +89,27 @@ class OrderRequest(BaseModel):
     songs: list[SongRequest] = Field(min_length=1, max_length=MAX_SONGS_PER_ORDER)
 
 
+class PagePicture(BaseModel):
+    page: int = Field(ge=0, le=200)
+    url: str = Field(max_length=2000)
+    turn: int = 0
+
+
+class RereadRequest(BaseModel):
+    song_id: str = Field(min_length=1, max_length=100)
+    callback_url: str = Field(max_length=2000)
+    page_url: str | None = Field(default=None, max_length=2000)
+    pages: list[PagePicture] = Field(max_length=40)
+    lines: list[dict] = Field(min_length=1, max_length=120)
+    score: dict
+
+
 class NoSuchJob(Exception):
     pass
 
 
 def build_api(run: Run, start: Start, poll: Poll, start_song: StartSong | None = None,
-              preview: Preview | None = None, service: str = "pms-conversion") -> FastAPI:
+              preview: Preview | None = None, start_reread: StartReread | None = None, service: str = "pms-conversion") -> FastAPI:
     api = FastAPI(title="PlayMySheetMusic conversion", docs_url=None, redoc_url=None, openapi_url=None)
 
     @api.middleware("http")
@@ -174,6 +202,25 @@ def build_api(run: Run, start: Start, poll: Poll, start_song: StartSong | None =
         for song in order.songs:
             await start_song(song.song_id, song.files, order.callback_url, order.page_url)
         return JSONResponse({"ok": True, "started": len(order.songs)}, status_code=202)
+
+    @api.post("/reread")
+    async def read_lines_again(wanted: RereadRequest):
+        if start_reread is None:
+            raise HTTPException(501, "Not available here.")
+        try:
+            check_address(wanted.callback_url)
+            if wanted.page_url:
+                check_address(wanted.page_url)
+            for page in wanted.pages:
+                check_address(page.url)
+                if page.turn not in (0, 90, 180, 270):
+                    raise BadAddress("Pages turn by quarters.")
+        except BadAddress as error:
+            raise HTTPException(400, str(error))
+        if not isinstance(wanted.score.get("bars"), list) or not isinstance(wanted.score.get("notes"), list):
+            raise HTTPException(400, "The song's notes are missing.")
+        await start_reread(wanted.model_dump())
+        return JSONResponse({"ok": True, "started": 1}, status_code=202)
 
     @api.post("/preview")
     async def preview_page(wanted: PreviewRequest):

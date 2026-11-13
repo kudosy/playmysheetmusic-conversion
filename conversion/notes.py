@@ -326,11 +326,16 @@ def _resolve_keys(flat: list[dict], raw: list[dict]) -> list[int]:
     return result
 
 
-def musicxml_to_notes(pages: list[str | bytes]) -> dict:
-    """Convert the MusicXML of each page, in order, into one song."""
+def musicxml_to_notes(pages: list[str | bytes], *, bar_len: int | float | None = None,
+                      pickup: bool = True) -> dict:
+    """Convert the MusicXML of each page, in order, into one song.
+
+    bar_len  how long a bar lasts when the music itself does not say (used
+             when a single line from the middle of a song is read again)
+    pickup   whether a short opening bar may be a pick-up bar"""
     flat: list[dict] = []  # one entry per bar of the song
     raw: list[dict] = []  # every note, before tidying
-    inherited: Fraction | None = None
+    inherited: Fraction | None = Fraction(bar_len).limit_denominator(96) if bar_len else None
     position = Fraction(0)
     system = -1
 
@@ -342,7 +347,7 @@ def musicxml_to_notes(pages: list[str | bytes]) -> dict:
             continue
         mapping = _hand_map(parts)
         count = max(len(p.measures) for p in parts)
-        lengths, inherited = _page_bar_lengths(parts, count, inherited, first_page=not flat)
+        lengths, inherited = _page_bar_lengths(parts, count, inherited, first_page=pickup and not flat)
         belief = {pi: 0 for pi in range(len(parts))}  # key each part thinks it is in
 
         line = 0
@@ -378,7 +383,7 @@ def musicxml_to_notes(pages: list[str | bytes]) -> dict:
             flat.append({"n": b, "start": position, "len": lengths[i], "voice": has_voice, "page": page_index,
                          "line": line, "system": system, "new_line": new_line, "belief": dict(belief),
                          "mid_line_key": mid_line_key,
-                         "pickup": b == 0 and count > 1 and lengths[0] < lengths[1]})
+                         "pickup": pickup and b == 0 and count > 1 and lengths[0] < lengths[1]})
             position += lengths[i]
 
     # Put back sharps and flats lost where a line's key signature was misread.

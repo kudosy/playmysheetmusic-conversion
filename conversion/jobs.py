@@ -146,3 +146,65 @@ def run_song(
         except BadAddress:
             payload["reported"] = False
     return payload
+
+
+MAX_PAGES_PER_REREAD = 40
+
+
+def run_reread(
+    song_id: str,
+    pages: list[dict],
+    lines: list[dict],
+    score: dict,
+    reread: Callable[[dict, dict, list, dict], dict],
+    callback_url: str | None = None,
+    secret: str = "",
+    allow_plain_http: bool = False,
+    report_waits: tuple[float, ...] = REPORT_WAITS,
+    page_url: str | None = None,
+) -> dict:
+    """Read some lines of a song again (see conversion/reread.py) and tell
+    the website. `pages` is [{"page", "url", "turn"}]: the page pictures the
+    website keeps, with a quarter turn where the owner asked for one.
+    `reread` takes (page pictures, turns, lines, score) and returns the usual
+    kind of result. Turned pages are sent back to `page_url` first, and the
+    song is only reported as done when every one of them arrived, so that the
+    boxes and the pictures never disagree."""
+    started = time.time()
+    try:
+        if len(pages) > MAX_PAGES_PER_REREAD:
+            raise BadAddress("too many pages")
+        try:
+            pictures = {int(entry["page"]): fetch_file(entry["url"], allow_plain_http) for entry in pages}
+        except BadAddress:
+            raise
+        except Exception:
+            payload = {"ok": False, "code": "download", "message": MSG_DOWNLOAD}
+        else:
+            turns = {int(entry["page"]): int(entry["turn"]) for entry in pages if entry.get("turn")}
+            result = reread(pictures, turns, lines, score)
+            if result.get("ok"):
+                waits = tuple(w for w in PAGE_WAITS if w <= max(report_waits, default=0)) or (0,)
+                sent = []
+                for number, jpeg in sorted((result.get("images") or {}).items()):
+                    if not page_url or not send_page(page_url, secret, song_id, number, jpeg, allow_plain_http, waits):
+                        break
+                    sent.append(number)
+                if len(sent) == len(result.get("images") or {}):
+                    payload = {"ok": True, "score": result["score"], "bar_map": result["bar_map"],
+                               "read": result["read"], "empty": result["empty"], "turned": sent}
+                else:
+                    payload = {"ok": False, "code": "failed", "message": MSG_FAILED, "turned": sent}
+            else:
+                payload = {"ok": False, "code": result.get("code", "failed"),
+                           "message": result.get("message", MSG_FAILED)}
+    except Exception:
+        payload = {"ok": False, "code": "failed", "message": MSG_FAILED}
+    payload["song_id"] = song_id
+    payload["seconds"] = round(time.time() - started, 1)
+    if callback_url:
+        try:
+            payload["reported"] = report(callback_url, secret, payload, allow_plain_http, report_waits)
+        except BadAddress:
+            payload["reported"] = False
+    return payload
