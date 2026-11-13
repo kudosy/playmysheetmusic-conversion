@@ -27,6 +27,7 @@ released under the same licence (see `LICENSE`).
 | `conversion/recognize.py` | Step 3: running homr on one page. |
 | `conversion/notes.py` | Step 4: MusicXML to the note model. No dependencies. |
 | `conversion/pipeline.py` | All four steps together: `convert(files)`. |
+| `conversion/jobs.py` | After a purchase: fetch a song's pages, convert, report back to the website. |
 | `conversion/webapi.py` | The web address (FastAPI). |
 | `modal_app.py` | How the service runs on [Modal](https://modal.com). |
 | `scripts/convert_file.py` | Convert a file on your own computer. |
@@ -73,6 +74,7 @@ Everything except `/health` needs the header
 | `POST /convert` | Send file(s), wait, get the result. Best for one page or a preview. |
 | `POST /jobs` | Send file(s), get `{"job": "..."}` back at once. Best for long songs. |
 | `GET /jobs/<job>` | `{"status": "working"}` until finished, then the result. |
+| `POST /songs` | What the website uses after a purchase. Send links to each song's pages and an address to call back; the answer comes at once and each result is posted to that address when ready. |
 
 Files go in a form field called `files`; repeat it for several photos of one
 song, in page order. Optional fields: `pages` (read at most this many pages),
@@ -84,6 +86,18 @@ curl -H "Authorization: Bearer $CONVERSION_SECRET" \
      -F files=@page1.jpg -F files=@page2.jpg \
      https://<workspace>--pms-conversion-web.modal.run/convert
 ```
+
+`/songs` takes JSON rather than files:
+
+```json
+{"callback_url": "https://playmysheetmusic.com/api/conversion/callback",
+ "songs": [{"song_id": "…", "files": ["https://…/page1.jpg", "https://…/page2.jpg"]}]}
+```
+
+For each song the service downloads the pages, converts them and posts
+`{"song_id": …, "ok": true, "score": …}` (or `"ok": false` with a `code` and
+`message`) to `callback_url`, with the same `Authorization` header so the
+website knows who is calling. It tries a few times if the website is busy.
 
 The shared secret lives in a Modal secret named `pms-conversion`, key
 `CONVERSION_SECRET`. The first deploy creates it with a random value, so the

@@ -5,6 +5,7 @@ GET  /health            is the service up? (no password)
 POST /convert           send file(s), wait, get the notes back
 POST /jobs              send file(s), get a job number straight away
 GET  /jobs/<number>     ask whether that job is finished, and get the notes
+POST /songs             convert purchased songs and call the website back
 
 Everything except /health needs the header
     Authorization: Bearer <CONVERSION_SECRET>
@@ -13,6 +14,17 @@ Files go in a form field called "files" (repeat it for several photos of one
 song, in page order). Optional form fields: "pages" (read at most this many
 pages), "top" (read only this share of each page from the top, e.g. 0.33) and
 "musicxml" (true to get homr's MusicXML back as well).
+
+/songs is what the website uses after a purchase. It takes JSON:
+
+    {"callback_url": "https://.../api/conversion/callback",
+     "songs": [{"song_id": "...", "files": ["https://...page1", "https://...page2"]}]}
+
+and answers at once. Each song is then converted on its own, and the result
+is posted to callback_url with the same Authorization header:
+
+    {"song_id": "...", "ok": true, "score": {...}, "title": "...", "pages": [...]}
+    {"song_id": "...", "ok": false, "code": "no_music", "message": "..."}
 """
 
 from __future__ import annotations
@@ -23,6 +35,9 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
+from .jobs import MAX_FILES_PER_SONG, BadAddress, check_address
 
 MAX_FILES = 10  # photos per song (the website allows 10)
 MAX_UPLOAD_BYTES = 60 * 1024 * 1024  # all files of one song together
@@ -31,13 +46,26 @@ MIN_SECRET_LENGTH = 16
 Run = Callable[[list[bytes], "int | None", "float | None", bool], Awaitable[dict]]
 Start = Callable[[list[bytes], "int | None", "float | None", bool], Awaitable[str]]
 Poll = Callable[[str], Awaitable["dict | None"]]
+StartSong = Callable[[str, list[str], str], Awaitable[None]]
+MAX_SONGS_PER_ORDER = 40
+
+
+class SongRequest(BaseModel):
+    song_id: str = Field(min_length=1, max_length=100)
+    files: list[str] = Field(min_length=1, max_length=MAX_FILES_PER_SONG)
+
+
+class OrderRequest(BaseModel):
+    callback_url: str = Field(max_length=2000)
+    songs: list[SongRequest] = Field(min_length=1, max_length=MAX_SONGS_PER_ORDER)
 
 
 class NoSuchJob(Exception):
     pass
 
 
-def build_api(run: Run, start: Start, poll: Poll, service: str = "pms-conversion") -> FastAPI:
+def build_api(run: Run, start: Start, poll: Poll, start_song: StartSong | None = None,
+              service: str = "pms-conversion") -> FastAPI:
     api = FastAPI(title="PlayMySheetMusic conversion", docs_url=None, redoc_url=None, openapi_url=None)
 
     @api.middleware("http")
@@ -113,5 +141,20 @@ def build_api(run: Run, start: Start, poll: Poll, service: str = "pms-conversion
         if result is None:
             return JSONResponse({"ok": True, "status": "working"}, status_code=202)
         return reply(result)
+
+    @api.post("/songs")
+    async def convert_songs(order: OrderRequest):
+        if start_song is None:
+            raise HTTPException(501, "Not available here.")
+        try:
+            check_address(order.callback_url)
+            for song in order.songs:
+                for url in song.files:
+                    check_address(url)
+        except BadAddress as error:
+            raise HTTPException(400, str(error))
+        for song in order.songs:
+            await start_song(song.song_id, song.files, order.callback_url)
+        return JSONResponse({"ok": True, "started": len(order.songs)}, status_code=202)
 
     return api

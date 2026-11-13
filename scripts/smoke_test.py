@@ -69,6 +69,13 @@ def main() -> int:
     bad = convert.remote([b"this is not a picture"])
     check("a file that is not a picture is refused", bad.get("ok") is False and bad.get("code") == "unreadable", str(bad)[:120])
 
+    # The after-purchase path: the service fetches the page itself from a link.
+    link = "https://raw.githubusercontent.com/kudosy/playmysheetmusic-conversion/main/tests/sample/sample_tune.png"
+    bought = modal.Function.from_name(APP, "convert_purchased_song").remote("smoke-test", [link])
+    wrong = problems(bought["score"]) if bought.get("ok") else [str(bought)[:200]]
+    check("a purchased song is fetched from its link and converted", not wrong and bought.get("song_id") == "smoke-test",
+          "; ".join(wrong[:3]))
+
     url = modal.Function.from_name(APP, "web").get_web_url()
     print(f"      web address: {url}", flush=True)
     code, body = status_of(url + "/health")
@@ -77,6 +84,8 @@ def main() -> int:
     check("web address refuses /convert without the secret", code == 401, str(code))
     code, _ = status_of(url + "/jobs/anything")
     check("web address refuses /jobs without the secret", code == 401, str(code))
+    code, _ = status_of(url + "/songs", "POST")
+    check("web address refuses /songs without the secret", code == 401, str(code))
 
     print("\nALL CHECKS PASSED" if not failures else f"\n{len(failures)} CHECK(S) FAILED: " + ", ".join(failures), flush=True)
     return 1 if failures else 0

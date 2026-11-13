@@ -41,8 +41,14 @@ def client(monkeypatch):
             return GOOD
         raise NoSuchJob(job)
 
-    test_client = TestClient(build_api(run, start, poll))
+    songs = []
+
+    async def start_song(song_id, urls, callback_url):
+        songs.append((song_id, urls, callback_url))
+
+    test_client = TestClient(build_api(run, start, poll, start_song))
     test_client.seen = seen
+    test_client.songs = songs
     return test_client
 
 
@@ -91,3 +97,25 @@ def test_jobs(client):
     assert client.get("/jobs/fc-123", headers=AUTH).json() == {"ok": True, "status": "working"}
     assert client.get("/jobs/fc-done", headers=AUTH).json()["ok"] is True
     assert client.get("/jobs/nope", headers=AUTH).status_code == 404
+
+
+def test_purchased_songs_are_started_one_by_one(client):
+    order = {"callback_url": "https://playmysheetmusic.com/api/conversion/callback",
+             "songs": [{"song_id": "a", "files": ["https://x.co/1.jpg", "https://x.co/2.jpg"]},
+                       {"song_id": "b", "files": ["https://x.co/3.pdf"]}]}
+    assert client.post("/songs", json=order).status_code == 401
+    response = client.post("/songs", json=order, headers=AUTH)
+    assert response.status_code == 202 and response.json() == {"ok": True, "started": 2}
+    assert client.songs == [("a", ["https://x.co/1.jpg", "https://x.co/2.jpg"], order["callback_url"]),
+                            ("b", ["https://x.co/3.pdf"], order["callback_url"])]
+
+
+def test_bad_orders_are_refused(client):
+    good = {"callback_url": "https://site/cb", "songs": [{"song_id": "a", "files": ["https://x.co/1.jpg"]}]}
+    for change in ({"callback_url": "http://site/cb"}, {"songs": []},
+                   {"songs": [{"song_id": "a", "files": []}]},
+                   {"songs": [{"song_id": "a", "files": ["file:///etc/passwd"]}]},
+                   {"songs": [{"song_id": "a", "files": ["https://x.co/1.jpg"] * 11}]}):
+        response = client.post("/songs", json={**good, **change}, headers=AUTH)
+        assert response.status_code in (400, 422), change
+    assert client.songs == []

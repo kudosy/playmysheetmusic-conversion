@@ -8,6 +8,9 @@ Three pieces:
 
   convert_song   file(s) in, notes out. Called from the web address below, or
                  directly with the Modal Python library.
+  convert_purchased_song
+                 what runs after a purchase: fetches a song's uploaded pages,
+                 converts them and posts the result back to the website.
   read_one_page  reads a single page; convert_song uses it to read the pages
                  of a long song side by side instead of one after another.
   web            the web address the website talks to.
@@ -89,6 +92,18 @@ def convert_song(
         return {"ok": False, "code": error.code, "message": error.message}
 
 
+@app.function(image=image, secrets=[modal.Secret.from_name(SECRET_NAME)], cpu=4, memory=4096,
+              timeout=1800, max_containers=8, scaledown_window=120)
+def convert_purchased_song(song_id: str, urls: list[str], callback_url: str | None = None) -> dict:
+    """After a purchase: download a song's pages, convert them, and post the
+    result to the website. Returns what was reported."""
+    import os
+
+    from conversion.jobs import run_song
+
+    return run_song(song_id, urls, convert_song.local, callback_url, os.environ.get("CONVERSION_SECRET", ""))
+
+
 @app.function(image=image, secrets=[modal.Secret.from_name(SECRET_NAME)], cpu=0.5, memory=1024,
               timeout=900, max_containers=2, scaledown_window=300)
 @modal.concurrent(max_inputs=20)
@@ -114,4 +129,7 @@ def web():
         except (modal.exception.NotFoundError, modal.exception.InvalidError) as error:
             raise NoSuchJob(job) from error
 
-    return build_api(run, start, poll, service=APP_NAME)
+    async def start_song(song_id, urls, callback_url):
+        await convert_purchased_song.spawn.aio(song_id, urls, callback_url)
+
+    return build_api(run, start, poll, start_song, service=APP_NAME)
