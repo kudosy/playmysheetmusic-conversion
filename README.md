@@ -12,8 +12,9 @@ released under the same licence (see `LICENSE`).
 
 1. **Opens the file.** PDF, JPG, PNG, HEIC, WebP or TIFF. A PDF becomes one
    picture per page.
-2. **Cleans up each page.** Turns a sideways or upside-down page the right way
-   up, straightens a tilted one, and evens out shadows. No AI upscaling.
+2. **Cleans up each page.** Turns a sideways page upright, straightens a
+   tilted one, and evens out shadows. A page that arrives level is never
+   turned upside down. No AI upscaling.
 3. **Reads the music** with homr, which writes MusicXML.
 4. **Converts the MusicXML to notes** for the player, joining all pages into
    one song. It also repairs one thing homr often gets wrong on photos: the

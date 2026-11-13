@@ -1,8 +1,8 @@
 """Open an uploaded file and get each page ready for reading.
 
 A PDF becomes one image per page; a photo (JPG, PNG, HEIC, WebP, TIFF) becomes
-one image. Each page is then turned the right way up, straightened and given
-even lighting. Nothing is invented: there is no AI upscaling, only geometry
+one image. Each page is then turned upright if it is sideways, straightened and
+given even lighting. Nothing is invented: there is no AI upscaling, only geometry
 and brightness.
 """
 
@@ -259,11 +259,13 @@ def normalize(image: np.ndarray) -> Page:
         _, _, staves = _staves(level)
         return angle, sum(x1 - x0 for x0, _, x1, _ in staves)
 
+    turned = False
     angle, found = staves_when_level(ink)
     side_angle, side_found = staves_when_level(cv2.rotate(ink, cv2.ROTATE_90_CLOCKWISE))
     if side_found > 1.5 * found:
         page.image = cv2.rotate(page.image, cv2.ROTATE_90_CLOCKWISE)
         page.steps.append("turned a sideways page")
+        turned = True
         angle, found = side_angle, side_found
     if found and 0.3 <= abs(angle) <= MAX_SKEW_DEGREES:
         page.image = _rotate(page.image, angle)
@@ -271,7 +273,13 @@ def normalize(image: np.ndarray) -> Page:
     if page.steps:
         ink = _ink(_small_gray(page.image))
 
-    if _upside_down(ink):
+    # Only a page we have just turned from sideways is checked for being upside
+    # down (a quarter turn can go either way). A page that arrived with its
+    # staves level is left as the customer sent it: the check below is a guess
+    # from where the ink sits, and on a curved or shadowed photo it has turned
+    # a correct page upside down. A wrong turn ruins every note on the page,
+    # so it is not worth the risk.
+    if turned and _upside_down(ink):
         page.image = cv2.rotate(page.image, cv2.ROTATE_180)
         page.steps.append("turned an upside-down page")
 
