@@ -6,6 +6,7 @@ POST /convert           send file(s), wait, get the notes back
 POST /jobs              send file(s), get a job number straight away
 GET  /jobs/<number>     ask whether that job is finished, and get the notes
 POST /songs             convert purchased songs and call the website back
+POST /preview           read the start of one uploaded page, wait, get the notes
 
 Everything except /health needs the header
     Authorization: Bearer <CONVERSION_SECRET>
@@ -25,6 +26,10 @@ is posted to callback_url with the same Authorization header:
 
     {"song_id": "...", "ok": true, "score": {...}, "title": "...", "pages": [...]}
     {"song_id": "...", "ok": false, "code": "no_music", "message": "..."}
+
+/preview is what the website uses at checkout. It takes JSON
+{"url": "https://...page1", "top": 0.33}, reads only that share of the first
+page from the top, and answers with the usual result.
 """
 
 from __future__ import annotations
@@ -47,12 +52,18 @@ Run = Callable[[list[bytes], "int | None", "float | None", bool], Awaitable[dict
 Start = Callable[[list[bytes], "int | None", "float | None", bool], Awaitable[str]]
 Poll = Callable[[str], Awaitable["dict | None"]]
 StartSong = Callable[[str, list[str], str], Awaitable[None]]
+Preview = Callable[[str, float], Awaitable[dict]]
 MAX_SONGS_PER_ORDER = 40
 
 
 class SongRequest(BaseModel):
     song_id: str = Field(min_length=1, max_length=100)
     files: list[str] = Field(min_length=1, max_length=MAX_FILES_PER_SONG)
+
+
+class PreviewRequest(BaseModel):
+    url: str = Field(max_length=2000)
+    top: float = Field(default=0.33, ge=0.05, le=1)
 
 
 class OrderRequest(BaseModel):
@@ -65,7 +76,7 @@ class NoSuchJob(Exception):
 
 
 def build_api(run: Run, start: Start, poll: Poll, start_song: StartSong | None = None,
-              service: str = "pms-conversion") -> FastAPI:
+              preview: Preview | None = None, service: str = "pms-conversion") -> FastAPI:
     api = FastAPI(title="PlayMySheetMusic conversion", docs_url=None, redoc_url=None, openapi_url=None)
 
     @api.middleware("http")
@@ -156,5 +167,15 @@ def build_api(run: Run, start: Start, poll: Poll, start_song: StartSong | None =
         for song in order.songs:
             await start_song(song.song_id, song.files, order.callback_url)
         return JSONResponse({"ok": True, "started": len(order.songs)}, status_code=202)
+
+    @api.post("/preview")
+    async def preview_page(wanted: PreviewRequest):
+        if preview is None:
+            raise HTTPException(501, "Not available here.")
+        try:
+            check_address(wanted.url)
+        except BadAddress as error:
+            raise HTTPException(400, str(error))
+        return reply(await preview(wanted.url, wanted.top))
 
     return api

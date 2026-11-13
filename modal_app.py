@@ -94,14 +94,25 @@ def convert_song(
 
 @app.function(image=image, secrets=[modal.Secret.from_name(SECRET_NAME)], cpu=4, memory=4096,
               timeout=1800, max_containers=8, scaledown_window=120)
-def convert_purchased_song(song_id: str, urls: list[str], callback_url: str | None = None) -> dict:
-    """After a purchase: download a song's pages, convert them, and post the
-    result to the website. Returns what was reported."""
+def convert_purchased_song(
+    song_id: str,
+    urls: list[str],
+    callback_url: str | None = None,
+    max_pages: int | None = None,
+    top_fraction: float | None = None,
+) -> dict:
+    """Download a song's pages from their links, convert them, and (when a
+    callback address is given) post the result to the website. Returns what
+    was reported. With max_pages and top_fraction it reads only the start of
+    the song, which is how the checkout preview uses it."""
     import os
 
     from conversion.jobs import run_song
 
-    return run_song(song_id, urls, convert_song.local, callback_url, os.environ.get("CONVERSION_SECRET", ""))
+    def convert(files):
+        return convert_song.local(files, max_pages, top_fraction)
+
+    return run_song(song_id, urls, convert, callback_url, os.environ.get("CONVERSION_SECRET", ""))
 
 
 @app.function(image=image, secrets=[modal.Secret.from_name(SECRET_NAME)], cpu=0.5, memory=1024,
@@ -132,4 +143,7 @@ def web():
     async def start_song(song_id, urls, callback_url):
         await convert_purchased_song.spawn.aio(song_id, urls, callback_url)
 
-    return build_api(run, start, poll, start_song, service=APP_NAME)
+    async def preview(url, top):
+        return await convert_purchased_song.remote.aio("preview", [url], None, 1, top)
+
+    return build_api(run, start, poll, start_song, preview, service=APP_NAME)

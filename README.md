@@ -86,6 +86,7 @@ curl -H "Authorization: Bearer $CONVERSION_SECRET" \
      -F files=@page1.jpg -F files=@page2.jpg \
      https://<workspace>--pms-conversion-web.modal.run/convert
 ```
+| `POST /preview` | What the website uses at checkout. Send `{"url": "https://…/page1.jpg", "top": 0.33}`; it reads only that share of the first page from the top and answers with the result. |
 
 `/songs` takes JSON rather than files:
 

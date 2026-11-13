@@ -76,6 +76,12 @@ def main() -> int:
     check("a purchased song is fetched from its link and converted", not wrong and bought.get("song_id") == "smoke-test",
           "; ".join(wrong[:3]))
 
+    started = time.time()
+    peek = modal.Function.from_name(APP, "convert_purchased_song").remote("preview", [link], None, 1, 0.5)
+    check("checkout preview: top of the page from a link", bool(peek.get("ok")) and len(peek["score"]["bars"]) == 4,
+          str(peek)[:160] if not peek.get("ok") else f"{len(peek['score']['bars'])} bars")
+    print(f"      preview: {time.time() - started:.1f}s", flush=True)
+
     url = modal.Function.from_name(APP, "web").get_web_url()
     print(f"      web address: {url}", flush=True)
     code, body = status_of(url + "/health")
@@ -86,6 +92,8 @@ def main() -> int:
     check("web address refuses /jobs without the secret", code == 401, str(code))
     code, _ = status_of(url + "/songs", "POST")
     check("web address refuses /songs without the secret", code == 401, str(code))
+    code, _ = status_of(url + "/preview", "POST")
+    check("web address refuses /preview without the secret", code == 401, str(code))
 
     print("\nALL CHECKS PASSED" if not failures else f"\n{len(failures)} CHECK(S) FAILED: " + ", ".join(failures), flush=True)
     return 1 if failures else 0

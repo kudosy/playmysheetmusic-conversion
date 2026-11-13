@@ -46,7 +46,11 @@ def client(monkeypatch):
     async def start_song(song_id, urls, callback_url):
         songs.append((song_id, urls, callback_url))
 
-    test_client = TestClient(build_api(run, start, poll, start_song))
+    async def preview(url, top):
+        songs.append(("preview", url, top))
+        return GOOD if "good" in url else {"ok": False, "code": "no_music", "message": "We couldn't find sheet music in this image."}
+
+    test_client = TestClient(build_api(run, start, poll, start_song, preview))
     test_client.seen = seen
     test_client.songs = songs
     return test_client
@@ -119,3 +123,14 @@ def test_bad_orders_are_refused(client):
         response = client.post("/songs", json={**good, **change}, headers=AUTH)
         assert response.status_code in (400, 422), change
     assert client.songs == []
+
+
+def test_checkout_preview(client):
+    assert client.post("/preview", json={"url": "https://x.co/good.jpg"}).status_code == 401
+    ok = client.post("/preview", json={"url": "https://x.co/good.jpg"}, headers=AUTH)
+    assert ok.status_code == 200 and ok.json()["ok"] is True
+    assert client.songs == [("preview", "https://x.co/good.jpg", 0.33)]
+    no = client.post("/preview", json={"url": "https://x.co/list.jpg", "top": 0.5}, headers=AUTH)
+    assert no.status_code == 422 and no.json()["code"] == "no_music"
+    assert client.post("/preview", json={"url": "http://x.co/a.jpg"}, headers=AUTH).status_code == 400
+    assert client.post("/preview", json={"url": "https://x.co/a.jpg", "top": 3}, headers=AUTH).status_code == 422
