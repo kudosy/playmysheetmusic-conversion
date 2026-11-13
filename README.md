@@ -100,6 +100,7 @@ curl -H "Authorization: Bearer $CONVERSION_SECRET" \
      https://<workspace>--pms-conversion-web.modal.run/convert
 ```
 | `POST /preview` | What the website uses at checkout. Send `{"url": "https://…/page1.jpg", "top": 0.33}`; it reads only that share of the first page from the top and answers with the result. |
+| `POST /reread` | What the website uses when the owner of a song has corrected the boxes around its lines of music, or turned a page. Lines left alone keep their notes; the rest are cut out of the stored page pictures and read again. Takes JSON (see `conversion/webapi.py`), answers at once, and posts the new notes to the callback address. |
 
 `/songs` takes JSON rather than files:
 
