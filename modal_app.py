@@ -130,14 +130,16 @@ def reread_song(wanted: dict) -> dict:
     import cv2
 
     from conversion.jobs import run_reread
-    from conversion.pipeline import ConversionError, read_pages_here
-    from conversion.reread import BadLayout, reread
+    from conversion.pipeline import ConversionError
+    from conversion.reread import BadLayout, read_lines_here, reread
 
     def reader(images, with_title):
         if len(images) == 1:
-            return read_pages_here(images, with_title)
+            return read_lines_here(images, with_title)
         pngs = [cv2.imencode(".png", picture)[1].tobytes() for picture in images]
-        return list(read_one_page.map(pngs, [False] * len(images)))
+        # A box the engine cannot cope with counts as a box with no music in it.
+        results = read_one_page.map(pngs, [False] * len(images), return_exceptions=True)
+        return [(None, 0.0, None) if isinstance(result, BaseException) else result for result in results]
 
     def again(pictures, turns, lines, score):
         try:
@@ -147,6 +149,7 @@ def reread_song(wanted: dict) -> dict:
         except BadLayout:
             return {"ok": False, "code": "layout", "message": "Those boxes could not be used."}
 
+    print("reread", wanted["song_id"], "lines", len(wanted["lines"]), "pages", [(p["page"], p.get("turn")) for p in wanted["pages"]])
     return run_reread(wanted["song_id"], wanted["pages"], wanted["lines"], wanted["score"], again,
                       wanted.get("callback_url"), os.environ.get("CONVERSION_SECRET", ""),
                       page_url=wanted.get("page_url"))

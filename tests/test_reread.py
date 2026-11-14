@@ -128,6 +128,19 @@ def test_a_box_with_no_music_is_left_out_and_reported():
         reread({0: picture()}, {}, [{"page": 0, "box": [0.1, 0.4, 0.9, 0.6]}], old, stand_in(None))
 
 
+def test_a_box_the_engine_chokes_on_does_not_spoil_the_rest(monkeypatch):
+    import conversion.reread as module
+
+    def choke(images, with_title):
+        if images[0].shape[0] < 100:
+            raise RuntimeError("engine fell over")
+        return [(tune("DEFG" "ABCD", key=1, first_line=False), 1.0, None)]
+
+    monkeypatch.setattr(module, "read_pages_here", choke)
+    out = reread({0: picture()}, {}, [{"keep": 0}, {"page": 0, "box": [0.1, 0.4, 0.9, 0.5]}, {"page": 0, "box": [0.1, 0.5, 0.9, 0.9]}], old_song())
+    assert out["empty"] == [1] and len(out["score"]["lines"]) == 2 and letters(out, 1) == "DEFGABCD"
+
+
 def test_a_turned_page_is_turned_before_it_is_cut_and_sent_back():
     old = old_song()
     reader = stand_in(tune("CDEF" "GABC", key=1), tune("DEFG" "ABCD", key=1, first_line=False))

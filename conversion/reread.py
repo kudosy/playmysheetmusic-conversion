@@ -37,6 +37,19 @@ class BadLayout(ValueError):
     pass
 
 
+def read_lines_here(images: list[np.ndarray], with_title: bool) -> list[tuple[str | None, float, dict | None]]:
+    """Read cut-out lines one after another on this machine. A box the engine
+    cannot cope with counts as a box with no music in it, so that one odd box
+    does not spoil the others."""
+    out: list[tuple[str | None, float, dict | None]] = []
+    for image in images:
+        try:
+            out.extend(read_pages_here([image], False))
+        except Exception:
+            out.append((None, 0.0, None))
+    return out
+
+
 def turn_picture(image: np.ndarray, degrees: int) -> np.ndarray:
     import cv2
 
@@ -143,7 +156,7 @@ def reread(
     turns: dict[int, int],
     lines: list[dict],
     old: dict,
-    reader: Callable[[list[np.ndarray], bool], list[tuple[str | None, float, dict | None]]] = read_pages_here,
+    reader: Callable[[list[np.ndarray], bool], list[tuple[str | None, float, dict | None]]] = read_lines_here,
 ) -> dict:
     """See the top of this file. The result also has "read" (how many lines
     were read again), "empty" (positions in `lines` where no music was found)
@@ -193,7 +206,10 @@ def reread(
         score = None
         if xml is not None:
             usual = _usual_len(pieces[-1]["bars"]) if pieces else None
-            score = musicxml_to_notes([xml], bar_len=usual, pickup=not pieces)
+            try:
+                score = musicxml_to_notes([xml], bar_len=usual, pickup=not pieces)
+            except Exception:
+                score = None  # unusable reading: treated as a box with no music
         if not score or not score["notes"]:
             empty.append(index)
             continue

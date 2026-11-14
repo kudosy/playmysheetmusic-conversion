@@ -178,7 +178,8 @@ def run_reread(
             pictures = {int(entry["page"]): fetch_file(entry["url"], allow_plain_http) for entry in pages}
         except BadAddress:
             raise
-        except Exception:
+        except Exception as error:
+            print("reread: page picture not fetched:", song_id, type(error).__name__, error)
             payload = {"ok": False, "code": "download", "message": MSG_DOWNLOAD}
         else:
             turns = {int(entry["page"]): int(entry["turn"]) for entry in pages if entry.get("turn")}
@@ -198,8 +199,12 @@ def run_reread(
             else:
                 payload = {"ok": False, "code": result.get("code", "failed"),
                            "message": result.get("message", MSG_FAILED)}
-    except Exception:
+    except Exception as error:
+        # Printed so that the reason shows in the service's log.
+        print("reread failed:", song_id, type(error).__name__, error)
         payload = {"ok": False, "code": "failed", "message": MSG_FAILED}
+    if not payload.get("ok"):
+        print("reread not done:", song_id, payload.get("code"), "turned pages stored:", payload.get("turned"))
     payload["song_id"] = song_id
     payload["seconds"] = round(time.time() - started, 1)
     if callback_url:
