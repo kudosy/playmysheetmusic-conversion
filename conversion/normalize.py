@@ -245,6 +245,30 @@ def even_lighting(image: np.ndarray) -> tuple[np.ndarray, bool]:
     return out, True
 
 
+def fade_show_through(image: np.ndarray) -> tuple[np.ndarray, bool]:
+    """Hymnals and thin paper show the next page's music faintly through the
+    page. The engine reads those ghost staffs as real lines of music. Real
+    print is far darker than the paper; the show-through only a little. Turn
+    marks that are only slightly darker than the paper around them into paper.
+    Done only when the page has strong, dark print to tell the two apart, so
+    a dim photo of real music is left alone."""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    small = _small_gray(image, 700)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+    paper = cv2.medianBlur(cv2.morphologyEx(small, cv2.MORPH_CLOSE, kernel), 21)
+    paper = cv2.resize(paper, (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_LINEAR).astype(np.int16)
+    darker = paper - gray.astype(np.int16)  # how much darker than the paper nearby
+    ink = float(np.percentile(darker, 99.5))  # the darkest real print
+    if ink < 110:
+        return image, False
+    faint = (darker > 0) & (darker < ink * 0.22)
+    if faint.mean() < 0.002:
+        return image, False
+    out = image.copy()
+    out[faint] = np.repeat(paper[faint].clip(0, 255).astype(np.uint8)[:, None], 3, axis=1)
+    return out, True
+
+
 # ---------------------------------------------------------------- the lot
 
 def normalize(image: np.ndarray) -> Page:
@@ -286,6 +310,9 @@ def normalize(image: np.ndarray) -> Page:
     page.image, changed = even_lighting(page.image)
     if changed:
         page.steps.append("evened out the lighting")
+    page.image, changed = fade_show_through(page.image)
+    if changed:
+        page.steps.append("faded print showing through the paper")
     return page
 
 

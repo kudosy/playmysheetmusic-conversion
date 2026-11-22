@@ -30,7 +30,7 @@ def page():
 
 def test_an_upright_page_is_left_alone():
     out = N.normalize(page())
-    assert out.steps == [] and same_way_up(out.image, page())
+    assert out.steps in ([], ["faded print showing through the paper"]) and same_way_up(out.image, page())
 
 
 def test_a_sideways_page_is_turned_upright_whichever_way_it_lies():
@@ -78,3 +78,26 @@ def test_one_wide_page_is_not_split():
 
 def test_an_upright_single_page_is_not_split():
     assert len(N.load_pages(_png(cv2.imread(SAMPLE)))) == 1
+
+
+def test_print_showing_through_the_paper_is_faded_and_real_print_kept():
+    """A hymnal page: dark music, and faint staffs from the next page showing
+    through. The faint ones become paper; the dark ones stay as they are."""
+    page = np.full((900, 1200, 3), 200, np.uint8)
+    for y in range(100, 150, 10):
+        cv2.line(page, (100, y), (1100, y), (30, 30, 30), 2)  # real staff
+    for y in range(600, 650, 10):
+        cv2.line(page, (100, y), (1100, y), (178, 178, 178), 2)  # show-through
+    out, changed = N.fade_show_through(page)
+    assert changed
+    assert out[600:650, 100:1100].min() >= 190  # gone
+    assert out[100:150, 100:1100].min() <= 40  # kept
+
+
+def test_a_dim_photo_is_left_alone():
+    """Without strong dark print there is nothing to compare against: change nothing."""
+    page = np.full((900, 1200, 3), 170, np.uint8)
+    for y in range(100, 150, 10):
+        cv2.line(page, (100, y), (1100, y), (110, 110, 110), 2)
+    out, changed = N.fade_show_through(page)
+    assert not changed and (out == page).all()
