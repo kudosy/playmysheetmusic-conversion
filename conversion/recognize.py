@@ -101,6 +101,33 @@ def _layout(systems, parts, to_input, shape) -> dict:
     return {"w": width, "h": height, "lines": lines}
 
 
+_guarded = False
+skipped_staffs: list[str] = []  # what was skipped on the last page read (for the logs)
+
+
+def _skip_staffs_that_break() -> None:
+    """The engine reads a page one staff at a time, and a single odd "staff"
+    (a page edge, spiral binding, print showing through from the next page)
+    can make it fail and lose the whole page. Treat such a staff the way the
+    engine treats an empty one: skip it and read the rest."""
+    global _guarded
+    if _guarded:
+        return
+    import homr.staff_parsing as staff_parsing
+
+    original = staff_parsing.parse_staff_image
+
+    def guarded(debug, index, staff, image, regions, config, page_to_input_image):
+        try:
+            return original(debug, index, staff, image, regions, config, page_to_input_image)
+        except Exception as error:  # noqa: BLE001 - any failure on this one staff
+            skipped_staffs.append(f"staff {index}: {type(error).__name__}: {str(error)[:120]}")
+            return []
+
+    staff_parsing.parse_staff_image = guarded
+    _guarded = True
+
+
 def read_page(image: np.ndarray, with_title: bool = True) -> tuple[str, str, dict]:
     """Run homr on one page (BGR image). Returns its MusicXML, homr's log,
     and the layout of the page (see _layout)."""
@@ -110,6 +137,8 @@ def read_page(image: np.ndarray, with_title: bool = True) -> tuple[str, str, dic
     from homr.main import ProcessingConfig, detect_staffs_in_image
     from homr.music_xml_generator import XmlGeneratorArguments, generate_xml
     from homr.staff_parsing import parse_staffs
+
+    _skip_staffs_that_break()
     from homr.system_repair import repair_systems
     from homr.transformer.configs import Config
 

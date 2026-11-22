@@ -289,5 +289,53 @@ def normalize(image: np.ndarray) -> Page:
     return page
 
 
+def find_spread_gutter(image: np.ndarray) -> int | None:
+    """In a photo of two book pages side by side, the column between them.
+
+    The music engine reads a page top to bottom and cannot tell two pages
+    apart, so it would mix their lines. On a two-page photo the staff lines
+    run across each page and stop at the gap between them: look for a column
+    near the middle with almost no staff line while both sides have plenty.
+    Returns that column (in this image's pixels), or None for a single page."""
+    height, width = image.shape[:2]
+    if width < height * 1.15:  # two pages side by side make a wide picture
+        return None
+    gray = _small_gray(image)
+    scale = image.shape[1] / gray.shape[1]
+    lines = _long_lines(_ink(gray), True)
+    if _line_spacing(lines) is None:
+        return None
+    profile = (lines > 0).sum(axis=0).astype(float)
+    small = gray.shape[1]
+    window = max(3, small // 100)
+    profile = np.convolve(profile, np.ones(window) / window, mode="same")
+    lo, hi = int(small * 0.3), int(small * 0.7)
+    gutter = lo + int(np.argmin(profile[lo:hi]))
+    margin = max(window, small // 20)
+    left = profile[int(small * 0.08): max(int(small * 0.08) + 1, gutter - margin)]
+    right = profile[min(small - 1, gutter + margin): int(small * 0.92)]
+    if len(left) < small * 0.15 or len(right) < small * 0.15:
+        return None
+    sides = min(float(np.median(left)), float(np.median(right)))
+    # Both pages carry staff lines and the gap far fewer (not none: print
+    # from the next page can show through the paper there). On one page the
+    # lines run straight across, so the middle has as many as the sides.
+    if sides < gray.shape[0] * 0.02 or profile[gutter] > sides * 0.5:
+        return None
+    return int(round(gutter * scale))
+
+
 def load_pages(data: bytes, max_pages: int = MAX_PAGES) -> list[Page]:
-    return [normalize(image) for image in open_pages(data, max_pages)]
+    pages: list[Page] = []
+    for image in open_pages(data, max_pages):
+        page = normalize(image)
+        gutter = find_spread_gutter(page.image)
+        if gutter is None:
+            pages.append(page)
+            continue
+        # Two pages in one photo: read the left page, then the right one.
+        for half in (page.image[:, :gutter], page.image[:, gutter:]):
+            part = normalize(half)
+            part.steps[:0] = page.steps + ["split a photo of two pages"]
+            pages.append(part)
+    return pages[:max_pages]
