@@ -157,3 +157,38 @@ def test_a_bar_with_nothing_in_it_is_dropped():
     assert len(score["bars"]) == 4  # the blank bar is gone, the rest bar stays
     assert [n["b"] for n in score["notes"]] == [0, 1, 3]
     assert score["bars"][1]["line"] == 1  # its line break moved to the next bar
+
+
+def _song(*measures):
+    """A one-part song from (body, barline xml) pairs, one quarter-note C each."""
+    note = '<note><pitch><step>C</step><octave>4</octave></pitch><duration>4</duration></note>'
+    attrs = '<attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time></attributes>'
+    body = "".join(f'<measure number="{i + 1}">{attrs if i == 0 else ""}{note if m[0] else ""}{m[1]}</measure>'
+                   for i, m in enumerate(measures))
+    return ('<score-partwise><part-list><score-part id="P1"/></part-list><part id="P1">' + body
+            + '</part></score-partwise>')
+
+
+def test_repeat_signs_and_endings_are_kept_on_their_bars():
+    fwd = '<barline location="right"><repeat direction="forward"/></barline>'  # as homr writes it
+    back = '<barline location="right"><repeat direction="backward"/></barline>'
+    e1 = '<barline location="left"><ending number="1" type="start"/></barline>'
+    e1stop = '<barline location="right"><ending number="1" type="stop"/><repeat direction="backward"/></barline>'
+    e2 = ('<barline location="left"><ending number="2" type="start"/></barline>'
+          '<barline location="right"><ending number="2" type="discontinue"/></barline>')
+    bars = musicxml_to_notes([_song((1, ""), (1, fwd), (1, ""), (1, e1), (1, e1stop), (1, e2), (1, back))])["bars"]
+    marks = [{k: b[k] for k in ("rs", "re", "end") if k in b} for b in bars]
+    assert marks == [{}, {"rs": True}, {}, {"end": [1]}, {"re": True, "end": [1]}, {"end": [2]}, {"re": True}]
+
+
+def test_a_repeat_sign_on_a_blank_bar_moves_to_the_right_bar():
+    fwd = '<barline location="right"><repeat direction="forward"/></barline>'
+    back = '<barline location="right"><repeat direction="backward"/></barline>'
+    bars = musicxml_to_notes([_song((1, ""), (0, fwd), (1, ""), (0, back), (1, ""))])["bars"]
+    # the start moves on to the next bar, the go-back sign to the bar before
+    assert [{k: b[k] for k in ("rs", "re") if k in b} for b in bars] == [{}, {"rs": True, "re": True}, {}]
+
+
+def test_bars_without_repeats_carry_no_marks():
+    bars = musicxml_to_notes([_song((1, ""), (1, ""))])["bars"]
+    assert all(not any(k in b for k in ("rs", "re", "end")) for b in bars)

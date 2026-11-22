@@ -2,7 +2,7 @@
 PlayMySheetMusic player and editor read.
 
     {
-      "bars":  [{"n", "start", "len", "voice", "page", "line"}],
+      "bars":  [{"n", "start", "len", "voice", "page", "line", "rs"?, "re"?, "end"?}],
       "notes": [{"id", "b", "p", "v", "t", "d", "s", "a", "m"}]
     }
 
@@ -11,6 +11,10 @@ where a note begins inside its bar and `d` how long it lasts. `p` is the part:
 0 voice line, 1 right hand, 2 left hand. `s` is the diatonic step
 (octave * 7 + letter, C = 0), `a` the alteration in semitones and `m` the MIDI
 number. A note id starts with its bar number, which the player relies on.
+A bar can also carry the repeat signs printed on it: "rs" (a repeat starts
+here), "re" (go back to the repeat start from the end of this bar) and "end"
+(the numbers of the 1st/2nd... ending it belongs to). Bars without them have
+none of these keys.
 
 Only the Python standard library is used here.
 """
@@ -51,6 +55,9 @@ class _Measure:
     extent: Fraction = Fraction(0)  # furthest point any voice reached
     filler: bool = True  # nothing but a whole-bar rest, or empty
     blank: bool = True  # no note and no rest at all
+    repeat_start: bool = False  # a repeat starts at the beginning of this bar
+    repeat_end: bool = False  # go back to the repeat start after this bar
+    endings: tuple[int, ...] = ()  # the 1st/2nd... ending this bar belongs to
     time: Fraction | None = None  # bar length from a time signature set here
     key: int | None = None  # key signature (sharps, or flats when negative) set here
     new_system: bool = False
@@ -82,8 +89,10 @@ def _text_int(element: ET.Element | None, default: int = 0) -> int:
 def _parse_part(part: ET.Element) -> _Part:
     out = _Part()
     divisions = 1
+    open_ending: tuple[int, ...] = ()  # an ending bracket carried over from earlier bars
     for measure in part.findall("measure"):
         m = _Measure()
+        m.endings = open_ending
         cursor = Fraction(0)
         last_onset = Fraction(0)
 
@@ -114,6 +123,26 @@ def _parse_part(part: ET.Element) -> _Part:
                     beat_type = _text_int(time.find("beat-type"))
                     if beats > 0 and beat_type > 0:
                         m.time = Fraction(beats * 4 * UNITS_PER_QUARTER, beat_type)
+            elif tag == "barline":
+                repeat = child.find("repeat")
+                if repeat is not None:
+                    if repeat.get("direction") == "backward":
+                        m.repeat_end = True
+                    elif repeat.get("direction") == "forward":
+                        # A start-repeat belongs to the bar it is written in. (homr
+                        # opens a new bar for it and labels it "right", but the
+                        # bar it opens is the one the repeat starts with.)
+                        m.repeat_start = True
+                ending = child.find("ending")
+                if ending is not None:
+                    numbers = tuple(int(x) for x in (ending.get("number") or "").replace(" ", "").split(",")
+                                    if x.isdigit() and 0 < int(x) < 10)
+                    if numbers:
+                        if ending.get("type") == "start":
+                            open_ending = numbers
+                        m.endings = tuple(sorted(set(m.endings) | set(numbers)))
+                        if ending.get("type") in ("stop", "discontinue"):
+                            open_ending = ()
             elif tag == "backup":
                 cursor = max(Fraction(0), cursor - units(child.find("duration")))
             elif tag == "forward":
@@ -349,6 +378,9 @@ def _drop_blank_bars(parts: list[_Part]) -> None:
                 carry.new_system = carry.new_system or m.new_system
                 carry.key = m.key if m.key is not None else carry.key
                 carry.time = m.time if m.time is not None else carry.time
+                carry.repeat_start = carry.repeat_start or m.repeat_start
+                if m.repeat_end and kept:  # a go-back sign belongs to the bar before
+                    kept[-1].repeat_end = True
                 continue
             if carry is not None:
                 m.new_system = m.new_system or carry.new_system
@@ -356,6 +388,7 @@ def _drop_blank_bars(parts: list[_Part]) -> None:
                     m.key = carry.key
                 if m.time is None:
                     m.time = carry.time
+                m.repeat_start = m.repeat_start or carry.repeat_start
                 carry = None
             kept.append(m)
         p.measures = kept
@@ -416,7 +449,15 @@ def musicxml_to_notes(pages: list[str | bytes], *, bar_len: int | float | None =
                         raw.append({"start": position + note.onset, "b": b, "p": hand, "v": v, "part": pi,
                                     "onset": note.onset, "dur": note.dur, "step": note.step, "alter": note.alter,
                                     "tie_start": note.tie_start, "tie_stop": note.tie_stop})
-            flat.append({"n": b, "start": position, "len": lengths[i], "voice": has_voice, "page": page_index,
+            marks: dict = {}
+            if any(m.repeat_start for _, m in here):
+                marks["rs"] = True
+            if any(m.repeat_end for _, m in here):
+                marks["re"] = True
+            endings = sorted({e for _, m in here for e in m.endings})
+            if endings:
+                marks["end"] = endings
+            flat.append({"marks": marks, "n": b, "start": position, "len": lengths[i], "voice": has_voice, "page": page_index,
                          "line": line, "system": system, "new_line": new_line, "belief": dict(belief),
                          "mid_line_key": mid_line_key,
                          "pickup": pickup and b == 0 and count > 1 and lengths[0] < lengths[1]})
@@ -483,7 +524,7 @@ def musicxml_to_notes(pages: list[str | bytes], *, bar_len: int | float | None =
                           "s": note["step"], "a": note["alter"], "m": note["m"]})
 
     bars = [{"n": bar["n"], "start": _num(bar["start"]), "len": _num(bar["len"]), "voice": bar["voice"],
-             "page": bar["page"], "line": bar["line"], "key": keys[bar["n"]]} for bar in flat]
+             "page": bar["page"], "line": bar["line"], "key": keys[bar["n"]], **bar["marks"]} for bar in flat]
     return {"bars": bars, "notes": notes}
 
 
