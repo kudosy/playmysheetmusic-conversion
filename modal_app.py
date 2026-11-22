@@ -55,14 +55,11 @@ def read_one_page(png: bytes, with_title: bool) -> tuple[str | None, float, dict
     import cv2
     import numpy as np
 
-    from conversion.recognize import NoMusicFound, read_page
+    from conversion.pipeline import read_one_safely
 
     started = time.time()
     picture = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
-    try:
-        xml, _, layout = read_page(picture, with_title=with_title)
-    except NoMusicFound:
-        xml, layout = None, None
+    xml, layout = read_one_safely(picture, with_title)
     return xml, round(time.time() - started, 1), layout
 
 
@@ -86,13 +83,21 @@ def convert_song(
             return read_pages_here(images, with_title)
         pngs = [cv2.imencode(".png", picture)[1].tobytes() for picture in images]
         titles = [with_title and index == 0 for index in range(len(images))]
-        return list(read_one_page.map(pngs, titles))
+        # A page whose reader itself crashes (out of memory, say) counts as a
+        # page that could not be read, so the other pages still make a song.
+        out = []
+        for result in read_one_page.map(pngs, titles, return_exceptions=True):
+            if isinstance(result, BaseException):
+                print("page reader crashed:", type(result).__name__, result)
+                result = (None, 0.0, {"error": f"{type(result).__name__}: {result}"[:300]})
+            out.append(result)
+        return out
 
     try:
         return convert(files, max_pages=max_pages, top_fraction=top_fraction,
                        keep_musicxml=keep_musicxml, keep_page_images=keep_page_images, reader=reader)
     except ConversionError as error:
-        return {"ok": False, "code": error.code, "message": error.message}
+        return {"ok": False, "code": error.code, "message": error.message, "detail": error.detail}
 
 
 @app.function(image=image, secrets=[modal.Secret.from_name(SECRET_NAME)], cpu=4, memory=4096,

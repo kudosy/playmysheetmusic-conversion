@@ -22,11 +22,37 @@ MSG_NO_MUSIC = "We couldn't find sheet music in this image."
 MSG_UNREADABLE = "We couldn't open this file. Please upload a PDF or a photo."
 
 
+MSG_FAILED = "Something went wrong while reading this song."
+
+
 class ConversionError(Exception):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, detail: str = ""):
         super().__init__(message)
         self.code = code
         self.message = message
+        self.detail = detail  # for the site owner, never shown to the buyer
+
+
+def error_text(error: BaseException) -> str:
+    """A short description of an unexpected error: its kind and message."""
+    return f"{type(error).__name__}: {error}"[:300]
+
+
+def read_one_safely(image: np.ndarray, with_title: bool) -> tuple[str | None, dict | None]:
+    """Read one page. A page with no music gives (None, None). A page the
+    engine fails on gives (None, {"error": ...}) instead of stopping the whole
+    song: the other pages are still read, and the error is logged."""
+    import traceback
+
+    try:
+        xml, _, layout = read_page(image, with_title=with_title)
+        return xml, layout
+    except NoMusicFound:
+        return None, None
+    except Exception as error:  # noqa: BLE001 - any engine failure on one page
+        print("page could not be read:", error_text(error))
+        traceback.print_exc()
+        return None, {"error": error_text(error)}
 
 
 def crop_top(image: np.ndarray, fraction: float) -> np.ndarray:
@@ -46,11 +72,8 @@ def read_pages_here(images: list[np.ndarray], with_title: bool) -> list[tuple[st
     out: list[tuple[str | None, float, dict | None]] = []
     for index, image in enumerate(images):
         started = time.time()
-        try:
-            # Only the first page carries the title, and reading it costs time.
-            xml, _, layout = read_page(image, with_title=with_title and index == 0)
-        except NoMusicFound:
-            xml, layout = None, None
+        # Only the first page carries the title, and reading it costs time.
+        xml, layout = read_one_safely(image, with_title and index == 0)
         out.append((xml, round(time.time() - started, 1), layout))
     return out
 
@@ -152,6 +175,9 @@ def convert(
     for index, (page, image, (xml, seconds, layout)) in enumerate(zip(pages, images, results)):
         entry: dict = {"page": index, "ok": xml is not None, "bars": 0, "notes": 0, "seconds": seconds,
                        "steps": page.steps, "width": int(image.shape[1]), "height": int(image.shape[0])}
+        if xml is None and layout and layout.get("error"):
+            entry["error"] = layout["error"]
+            layout = None
         if xml is not None:  # a cover or blank page inside a longer file is skipped
             xmls.append(xml)
             if layout:
@@ -161,6 +187,9 @@ def convert(
         report.append(entry)
 
     if not xmls:
+        errors = [entry["error"] for entry in report if entry.get("error")]
+        if errors:  # the engine failed on every page it could have read
+            raise ConversionError("failed", MSG_FAILED, "; ".join(errors))
         raise ConversionError("no_music", MSG_NO_MUSIC)
 
     score = musicxml_to_notes(xmls)

@@ -131,13 +131,21 @@ def run_song(
                             pass  # the song is still usable without its pictures
                 payload = {"ok": True, "score": result["score"], "title": result.get("title", ""),
                            "page_images": stored,
-                           "pages": [{k: page.get(k) for k in ("page", "ok", "bars", "notes", "steps")}
+                           "pages": [{k: page.get(k) for k in ("page", "ok", "bars", "notes", "steps", "error")}
                                      for page in result.get("pages", [])]}
             else:
                 payload = {"ok": False, "code": result.get("code", "failed"),
                            "message": result.get("message", MSG_FAILED)}
-    except Exception:
-        payload = {"ok": False, "code": "failed", "message": MSG_FAILED}
+                if result.get("detail"):
+                    payload["detail"] = str(result["detail"])[:500]
+                    print("song not read:", song_id, payload["code"], payload["detail"])
+    except Exception as error:
+        import traceback
+
+        print("song failed:", song_id, type(error).__name__, error)
+        traceback.print_exc()
+        payload = {"ok": False, "code": "failed", "message": MSG_FAILED,
+                   "detail": f"{type(error).__name__}: {error}"[:500]}
     payload["song_id"] = song_id
     payload["seconds"] = round(time.time() - started, 1)
     if callback_url:

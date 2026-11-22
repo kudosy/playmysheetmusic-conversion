@@ -99,6 +99,7 @@ def test_a_missing_file_and_a_crash_are_reported_too(site):
 
     run(site, [site["base"] + "/files/1.jpg"], crash)
     assert site["calls"][1]["body"]["code"] == "failed"
+    assert site["calls"][1]["body"]["detail"] == "RuntimeError: boom"  # for the site owner's alert
 
 
 def test_reporting_is_tried_again_when_the_site_is_busy(site):

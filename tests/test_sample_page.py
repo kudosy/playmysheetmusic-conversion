@@ -61,3 +61,35 @@ def test_a_file_that_is_not_a_picture_is_refused():
     with pytest.raises(ConversionError) as error:
         convert([b"this is not a picture"])
     assert error.value.code == "unreadable"
+
+
+@pytest.mark.slow
+def test_a_page_the_engine_fails_on_does_not_spoil_the_song(monkeypatch):
+    """One page crashing the engine: the song is made from the other pages and
+    the crash is listed for that page. Every page crashing: a "failed" refusal
+    that says why, for the site owner."""
+    from conversion import pipeline
+
+    real = pipeline.read_page
+    calls = {"n": 0}
+
+    def flaky(image, with_title=False):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ValueError("engine tripped")
+        return real(image, with_title=with_title)
+
+    monkeypatch.setattr(pipeline, "read_page", flaky)
+    with open(SAMPLE, "rb") as handle:
+        page = handle.read()
+    result = convert([page, page], with_title=False)
+    assert result["ok"] and problems(result["score"]) == []
+    assert result["pages"][1]["ok"] is False and "engine tripped" in result["pages"][1]["error"]
+
+    def broken(image, with_title=False):
+        raise RuntimeError("model missing")
+
+    monkeypatch.setattr(pipeline, "read_page", broken)
+    with pytest.raises(ConversionError) as error:
+        convert([page, page], with_title=False)
+    assert error.value.code == "failed" and "RuntimeError: model missing" in error.value.detail
