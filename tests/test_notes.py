@@ -138,3 +138,22 @@ def test_same_note_twice_in_a_chord_is_played_once():
                  + note("C", 3, 4, typ="whole") + note("C", 3, 4, chord=True, typ="whole")])
     out = musicxml_to_notes([xml])
     assert len(out["notes"]) == 1 and out["notes"][0]["p"] == 2  # a lone bass staff is the left hand
+
+
+def test_a_bar_with_nothing_in_it_is_dropped():
+    """The engine sometimes writes a bar with no note and no rest (beside a
+    repeat sign, or at the start of a line). It would play as a gap; a real
+    silent bar has a rest and stays."""
+    def measure(n, body, extra=""):
+        return f'<measure number="{n}">{extra}{body}</measure>'
+    note = '<note><pitch><step>C</step><octave>4</octave></pitch><duration>4</duration></note>'
+    rest = '<note><rest/><duration>4</duration></note>'
+    attrs = '<attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time></attributes>'
+    xml = ('<score-partwise><part-list><score-part id="P1"/></part-list><part id="P1">'
+           + measure(1, note, attrs) + measure(2, "", '<print new-system="yes"/>') + measure(3, note)
+           + measure(4, rest) + measure(5, note) + '</part></score-partwise>')
+    from conversion.notes import musicxml_to_notes
+    score = musicxml_to_notes([xml])
+    assert len(score["bars"]) == 4  # the blank bar is gone, the rest bar stays
+    assert [n["b"] for n in score["notes"]] == [0, 1, 3]
+    assert score["bars"][1]["line"] == 1  # its line break moved to the next bar

@@ -50,6 +50,7 @@ class _Measure:
     notes: list[_Note] = field(default_factory=list)
     extent: Fraction = Fraction(0)  # furthest point any voice reached
     filler: bool = True  # nothing but a whole-bar rest, or empty
+    blank: bool = True  # no note and no rest at all
     time: Fraction | None = None  # bar length from a time signature set here
     key: int | None = None  # key signature (sharps, or flats when negative) set here
     new_system: bool = False
@@ -121,6 +122,7 @@ def _parse_part(part: ET.Element) -> _Part:
             elif tag == "note":
                 if child.find("grace") is not None:
                     continue  # ornaments carry no time of their own
+                m.blank = False
                 dur = units(child.find("duration"))
                 is_chord = child.find("chord") is not None
                 onset = last_onset if is_chord else cursor
@@ -326,6 +328,39 @@ def _resolve_keys(flat: list[dict], raw: list[dict]) -> list[int]:
     return result
 
 
+def _drop_blank_bars(parts: list[_Part]) -> None:
+    """Remove bars with nothing in them at all, not even a rest, in every part.
+
+    Written music never has such a bar (a silent bar shows a rest), but the
+    engine sometimes adds one at the start of a line or beside a repeat sign,
+    which would play as a gap. A line break, key or time signature it carries
+    moves on to the next bar."""
+    count = max(len(p.measures) for p in parts)
+    blank = [all(i >= len(p.measures) or p.measures[i].blank for p in parts) for i in range(count)]
+    if not any(blank) or all(blank):
+        return
+    for p in parts:
+        kept: list[_Measure] = []
+        carry: _Measure | None = None
+        for i, m in enumerate(p.measures):
+            if blank[i]:
+                if carry is None:
+                    carry = _Measure()
+                carry.new_system = carry.new_system or m.new_system
+                carry.key = m.key if m.key is not None else carry.key
+                carry.time = m.time if m.time is not None else carry.time
+                continue
+            if carry is not None:
+                m.new_system = m.new_system or carry.new_system
+                if m.key is None:
+                    m.key = carry.key
+                if m.time is None:
+                    m.time = carry.time
+                carry = None
+            kept.append(m)
+        p.measures = kept
+
+
 def musicxml_to_notes(pages: list[str | bytes], *, bar_len: int | float | None = None,
                       pickup: bool = True) -> dict:
     """Convert the MusicXML of each page, in order, into one song.
@@ -345,6 +380,7 @@ def musicxml_to_notes(pages: list[str | bytes], *, bar_len: int | float | None =
         parts = [p for p in parts if p.measures]
         if not parts:
             continue
+        _drop_blank_bars(parts)
         mapping = _hand_map(parts)
         count = max(len(p.measures) for p in parts)
         lengths, inherited = _page_bar_lengths(parts, count, inherited, first_page=pickup and not flat)
